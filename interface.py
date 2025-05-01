@@ -281,7 +281,7 @@ class ModuleInterface:
              num_fetched = len(playlist_tracks)
              per_page = 100 # Assuming the API uses 100 per page
              for page in range(2, (total_tracks - 1) // per_page + 2):
-                 print(f"Fetching {num_fetched}/{total_tracks}", end="\\r")
+                 print(f"Fetching {num_fetched}/{total_tracks}") 
                  try:
                      if is_chart_endpoint:
                          paged_tracks_data = self.session.get_chart_tracks(playlist_id, page=page)
@@ -303,8 +303,6 @@ class ModuleInterface:
                  except Exception as e_page:
                       logging.error(f"Beatsource: Unexpected error fetching page {page} for playlist {playlist_id}: {e_page}")
                       break
-
-        print(f"Fetched {len(playlist_tracks)} tracks for playlist {playlist_id}." + " "*20)
 
         # Re-populate cache with all fetched tracks and add numbering
         cache = {"data": {}}
