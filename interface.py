@@ -112,9 +112,8 @@ class ModuleInterface:
 
     @staticmethod
     def custom_url_parse(link: str):
-        # Modified regex to accept 'playlist' singular
-        match = re.search(r"https?://(www.)?beatsource.com/(?:[a-z]{2}/)?.*?"
-                          r"(?P<type>track|release|artist|playlist|playlists|chart)/.*?/?(?P<id>\d+)", link)
+        # Regex updated to capture the final numeric ID in the path
+        match = re.search(r"https?://(?:www\.)?beatsource\.com/(?:[a-z]{2}/)?(?P<type>track|release|artist|playlist|playlists|chart).*/(?P<id>\d+)[^/]*?(?:$|\?)", link)
 
         if not match:
             # Handle cases where the regex doesn't match (e.g., invalid URL format)
@@ -144,9 +143,7 @@ class ModuleInterface:
 
         return MediaIdentification(
             media_type=media_type_enum,
-            media_id=media_id,
-            # Revert: Only set is_chart=True if URL explicitly contains /chart/
-            extra_kwargs={"is_chart": captured_type == "chart"}
+            media_id=media_id
         )
 
     @staticmethod
@@ -228,100 +225,139 @@ class ModuleInterface:
 
         return items
 
-    def get_playlist_info(self, playlist_id: str, is_chart: bool = False) -> PlaylistInfo:
+    def get_playlist_info(self, playlist_id: str) -> PlaylistInfo:
         playlist_data = None
         playlist_tracks_data = None
-        tried_other_type = False
+        is_chart_endpoint = False # Keep track of which endpoint succeeded
 
-        # --- Attempt to fetch based on initial is_chart guess --- 
+        # --- Attempt to fetch as a standard playlist first ---
         try:
-            if is_chart:
-                logging.debug(f"Beatsource: Fetching playlist info for chart ID: {playlist_id}")
-                playlist_data = self.session.get_chart(playlist_id)
-                playlist_tracks_data = self.session.get_chart_tracks(playlist_id)
-            else:
-                logging.debug(f"Beatsource: Fetching playlist info for playlist ID: {playlist_id}")
-                playlist_data = self.session.get_playlist(playlist_id)
-                playlist_tracks_data = self.session.get_playlist_tracks(playlist_id)
+            logging.debug(f"Beatsource: Fetching playlist info as playlist ID: {playlist_id}")
+            playlist_data = self.session.get_playlist(playlist_id)
+            playlist_tracks_data = self.session.get_playlist_tracks(playlist_id)
         except ConnectionError as e:
-            if "404" in str(e):
-                logging.warning(f"Beatsource: Initial fetch failed (404) for ID {playlist_id} as {'chart' if is_chart else 'playlist'}. Trying other type...")
-                tried_other_type = True
-                is_chart = not is_chart # Flip the type
+            # If it's a 404, try the chart endpoint
+            if "404" in str(e) or "Not found" in str(e):
+                logging.warning(f"Beatsource: Fetching as playlist failed (404). Trying chart endpoint for ID: {playlist_id}")
+                is_chart_endpoint = True
                 try:
-                    if is_chart:
-                        logging.debug(f"Beatsource: Re-fetching playlist info as chart ID: {playlist_id}")
-                        playlist_data = self.session.get_chart(playlist_id)
-                        playlist_tracks_data = self.session.get_chart_tracks(playlist_id)
-                    else:
-                        logging.debug(f"Beatsource: Re-fetching playlist info as playlist ID: {playlist_id}")
-                        playlist_data = self.session.get_playlist(playlist_id)
-                        playlist_tracks_data = self.session.get_playlist_tracks(playlist_id)
+                    logging.debug(f"Beatsource: Re-fetching playlist info as chart ID: {playlist_id}")
+                    playlist_data = self.session.get_chart(playlist_id)
+                    playlist_tracks_data = self.session.get_chart_tracks(playlist_id)
                 except ConnectionError as e2:
                     # If the second attempt also fails, raise the second error
-                    raise self.exception(f"Failed to get playlist info for {playlist_id} (tried both types): {e2}")
+                    raise self.exception(f"Failed to get playlist info for {playlist_id} (tried both playlist and chart endpoints): {e2}")
                 except Exception as e_retry:
                     # Catch other errors on retry
-                    raise self.exception(f"Unexpected error fetching playlist info for {playlist_id} on retry: {e_retry}")
+                    raise self.exception(f"Unexpected error fetching playlist info for {playlist_id} as chart: {e_retry}")
             else:
                 # If it's not a 404 error, re-raise the original error
-                raise self.exception(f"Failed to get playlist info for {playlist_id}: {e}")
+                raise self.exception(f"Failed to get playlist info for {playlist_id} (playlist endpoint): {e}")
         except Exception as e_initial:
-             # Catch other errors on initial attempt
-             raise self.exception(f"Unexpected error fetching playlist info for {playlist_id}: {e_initial}")
+             # Catch other errors on initial playlist attempt
+             raise self.exception(f"Unexpected error fetching playlist info for {playlist_id} (playlist endpoint): {e_initial}")
 
         # --- Check if data was successfully fetched --- 
         if playlist_data is None or playlist_tracks_data is None:
-            # This case might happen if the 404 error wasn't a ConnectionError, though unlikely
-            raise self.exception(f"Could not retrieve playlist info for {playlist_id} after attempts.")
+            raise self.exception(f"Could not retrieve playlist data for {playlist_id} after attempts.")
 
-        # --- Existing processing logic --- 
+        # --- Processing logic (adapts based on which endpoint succeeded) --- 
         cache = {"data": {}}
-        # NOTE: The value of is_chart might have changed if a retry occurred
-        if is_chart:
-            playlist_tracks = playlist_tracks_data.get("results")
+        if is_chart_endpoint:
+            # Chart endpoint response structure might be different (results directly contain tracks)
+            playlist_tracks = playlist_tracks_data.get("results", [])
         else:
-            playlist_tracks = [t.get("track") for t in playlist_tracks_data.get("results")]
+            # Playlist endpoint response structure (tracks are nested under "track")
+            playlist_tracks = [t.get("track") for t in playlist_tracks_data.get("results", []) if t.get("track")]
 
         total_tracks = playlist_tracks_data.get("count")
-        for page in range(2, (total_tracks - 1) // 100 + 2):
-            print(f"Fetching {len(playlist_tracks)}/{total_tracks}", end="\r")
-            # get the DJ chart or user playlist
-            if is_chart:
-                playlist_tracks += self.session.get_chart_tracks(playlist_id, page=page).get("results")
-            else:
-                # unfold the track element
-                playlist_tracks += [t.get("track")
-                                    for t in self.session.get_playlist_tracks(playlist_id, page=page).get("results")]
+        # Ensure total_tracks is an integer before calculating pages
+        if not isinstance(total_tracks, int) or total_tracks <= 0:
+             logging.warning(f"Beatsource: Invalid or missing 'count' in playlist tracks response for {playlist_id}. Assuming only first page.")
+             total_tracks = len(playlist_tracks) # Use the count from the first page as fallback
+        
+        # Fetch remaining pages if necessary
+        if total_tracks > len(playlist_tracks):
+             num_fetched = len(playlist_tracks)
+             per_page = 100 # Assuming the API uses 100 per page
+             for page in range(2, (total_tracks - 1) // per_page + 2):
+                 print(f"Fetching {num_fetched}/{total_tracks}", end="\\r")
+                 try:
+                     if is_chart_endpoint:
+                         paged_tracks_data = self.session.get_chart_tracks(playlist_id, page=page)
+                         new_tracks = paged_tracks_data.get("results", [])
+                     else:
+                         paged_tracks_data = self.session.get_playlist_tracks(playlist_id, page=page)
+                         new_tracks = [t.get("track") for t in paged_tracks_data.get("results", []) if t.get("track")]
+                     
+                     if not new_tracks:
+                          logging.warning(f"Beatsource: No more tracks found on page {page} for playlist {playlist_id}. Expected {total_tracks} total.")
+                          break
+                     playlist_tracks.extend(new_tracks)
+                     num_fetched += len(new_tracks)
+                     if num_fetched >= total_tracks:
+                          break
+                 except ConnectionError as e:
+                      logging.error(f"Beatsource: Failed to fetch page {page} for playlist {playlist_id} (endpoint: {'chart' if is_chart_endpoint else 'playlist'}): {e}")
+                      break
+                 except Exception as e_page:
+                      logging.error(f"Beatsource: Unexpected error fetching page {page} for playlist {playlist_id}: {e_page}")
+                      break
 
+        print(f"Fetched {len(playlist_tracks)} tracks for playlist {playlist_id}." + " "*20)
+
+        # Re-populate cache with all fetched tracks and add numbering
+        cache = {"data": {}}
+        actual_total_tracks = len(playlist_tracks)
         for i, track in enumerate(playlist_tracks):
-            # add the track numbers
-            track["track_number"] = i + 1
-            track["total_tracks"] = total_tracks
-            # add the modified track to the track_extra_kwargs
-            cache["data"][track.get("id")] = track
+            if track and track.get("id"): # Ensure track and track ID are valid
+                 track["track_number"] = i + 1
+                 track["total_tracks"] = actual_total_tracks
+                 cache["data"][track.get("id")] = track
+            else:
+                 logging.warning(f"Beatsource: Skipping invalid track data at index {i} in playlist {playlist_id}")
 
-        creator = "User"
-        if is_chart:
-            creator = playlist_data.get("person").get("owner_name") if playlist_data.get("person") else "Beatsource"
+        # Process playlist metadata (adapts based on endpoint)
+        if is_chart_endpoint:
+            creator = playlist_data.get("person", {}).get("owner_name") or "Beatsource"
             release_year = playlist_data.get("change_date")[:4] if playlist_data.get("change_date") else None
-            cover_url = playlist_data.get("image").get("dynamic_uri")
+            cover_url_raw = playlist_data.get("image", {}).get("dynamic_uri")
         else:
+            creator = "User" # Default for standard playlists
             release_year = playlist_data.get("updated_date")[:4] if playlist_data.get("updated_date") else None
-            # always get the first image of the four total images, why is there no dynamic_uri available? Annoying
-            cover_url = playlist_data.get("release_images")[0]
+            # Handle potentially missing cover art for standard playlists
+            cover_url_raw = None
+            release_images = playlist_data.get("release_images")
+            if release_images and isinstance(release_images, list) and len(release_images) > 0:
+                 img = release_images[0]
+                 if isinstance(img, dict) and "dynamic_uri" in img:
+                     cover_url_raw = img.get("dynamic_uri")
+                 elif isinstance(img, str):
+                     cover_url_raw = img
+        
+        generated_cover_url = None
+        if cover_url_raw:
+             try:
+                 generated_cover_url = self._generate_artwork_url(cover_url_raw, self.cover_size)
+             except Exception as e_cover:
+                 logging.error(f"Beatsource: Failed to generate artwork URL for playlist {playlist_id} from '{cover_url_raw}': {e_cover}")
+        else:
+             logging.warning(f"Beatsource: No cover image found for playlist {playlist_id}")
+
+        # Filter out None/invalid tracks before calculating duration or getting IDs
+        valid_tracks = [t for t in playlist_tracks if t and t.get("id") and t.get("length_ms") is not None]
 
         return PlaylistInfo(
             name=playlist_data.get("name"),
             creator=creator,
             release_year=release_year,
-            duration=sum([(t.get("length_ms") or 0) // 1000 for t in playlist_tracks]),
-            tracks=[t.get("id") for t in playlist_tracks],
-            cover_url=self._generate_artwork_url(cover_url, self.cover_size),
+            duration=sum([(t.get("length_ms") or 0) // 1000 for t in valid_tracks]),
+            tracks=[t.get("id") for t in valid_tracks],
+            cover_url=generated_cover_url,
             track_extra_kwargs=cache
         )
 
-    def get_artist_info(self, artist_id: str, get_credited_albums: bool, is_chart: bool = False) -> ArtistInfo:
+    def get_artist_info(self, artist_id: str, get_credited_albums: bool) -> ArtistInfo:
         artist_data = self.session.get_artist(artist_id)
         artist_tracks_data = self.session.get_artist_tracks(artist_id)
 
