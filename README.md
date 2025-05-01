@@ -43,7 +43,7 @@ Follow these steps to get a local copy of Orpheus up and running:
 
 1. Go to your `orpheusdl/` directory and run the following command:
    ```sh
-   git clone https://github.com/bascurtiz/orpheusdl-beatsource.git modules/Beatsource
+   git clone https://github.com/bascurtiz/orpheusdl-beatsource.git modules/beatsource
    ```
 2. Execute:
    ```sh
