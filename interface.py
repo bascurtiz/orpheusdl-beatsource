@@ -225,7 +225,7 @@ class ModuleInterface:
 
         return items
 
-    def get_playlist_info(self, playlist_id: str) -> PlaylistInfo:
+    def get_playlist_info(self, playlist_id: str, **kwargs) -> PlaylistInfo:
         playlist_data = None
         playlist_tracks_data = None
         is_chart_endpoint = False # Keep track of which endpoint succeeded
