@@ -372,7 +372,7 @@ class ModuleInterface:
             track_extra_kwargs={"data": {t.get("id"): t for t in artist_tracks}},
         )
 
-    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo or None:
+    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo | None:
         # check if album is already in album cache, add it
         if data is None:
             data = {}
@@ -399,6 +399,12 @@ class ModuleInterface:
             # add the modified track to the track_extra_kwargs
             cache["data"][track.get("id")] = track
 
+        album_artists = album_data.get("artists") or album_data.get("remixers") or album_data.get("remixer")
+        # If no album artists found, try to get it from the first track
+        if not album_artists and tracks:
+            first_track = tracks[0]
+            album_artists = first_track.get("artists") or first_track.get("bsrc_remixer")
+
         return AlbumInfo(
             name=album_data.get("name"),
             release_year=album_data.get("publish_date")[:4] if album_data.get("publish_date") else None,
@@ -406,8 +412,8 @@ class ModuleInterface:
             duration=sum([t.get("length_ms") // 1000 for t in tracks]),
             upc=album_data.get("upc"),
             cover_url=self._generate_artwork_url(album_data.get("image").get("dynamic_uri"), self.cover_size),
-            artist=album_data.get("artists")[0].get("name"),
-            artist_id=album_data.get("artists")[0].get("id"),
+            artist=(album_artists or [{}])[0].get("name"),
+            artist_id=(album_artists or [{}])[0].get("id"),
             tracks=[t.get("id") for t in tracks],
             track_extra_kwargs=cache,
         )
@@ -446,8 +452,12 @@ class ModuleInterface:
         if track_data.get("catalog_number"):
             extra_tags["Catalog number"] = track_data.get("catalog_number")
 
+        track_artists = track_data.get("artists") or track_data.get("remixers") or track_data.get("remixer") or track_data.get("bsrc_remixer")
+        # Fallback to using track artists for album artist if album artist is missing
+        album_artists = album_data.get("artists") or album_data.get("remixers") or album_data.get("remixer") or track_artists
+
         tags = Tags(
-            album_artist=album_data.get("artists", [{}])[0].get("name"),
+            album_artist=(album_artists or [{}])[0].get("name"),
             track_number=track_data.get("number"),
             total_tracks=album_data.get("track_count"),
             upc=album_data.get("upc"),
@@ -484,8 +494,8 @@ class ModuleInterface:
             name=track_name,
             album=album_data.get("name"),
             album_id=album_data.get("id"),
-            artists=[a.get("name") for a in track_data.get("artists")],
-            artist_id=track_data.get("artists")[0].get("id"),
+            artists=[a.get("name") for a in (track_artists or [])],
+            artist_id=(track_artists or [{}])[0].get("id"),
             release_year=release_year,
             duration=length_ms // 1000 if length_ms else None,
             bitrate=bitrate, # Use determined bitrate
