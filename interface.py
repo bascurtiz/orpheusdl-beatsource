@@ -238,7 +238,7 @@ class ModuleInterface:
         except ConnectionError as e:
             # If it's a 404, try the chart endpoint
             if "404" in str(e) or "Not found" in str(e):
-                logging.warning(f"Beatsource: Fetching as playlist failed (404). Trying chart endpoint for ID: {playlist_id}")
+                logging.debug(f"Beatsource: Fetching as playlist failed (404). Trying chart endpoint for ID: {playlist_id}")
                 is_chart_endpoint = True
                 try:
                     logging.debug(f"Beatsource: Re-fetching playlist info as chart ID: {playlist_id}")
@@ -363,7 +363,6 @@ class ModuleInterface:
         artist_tracks = artist_tracks_data.get("results")
         total_tracks = artist_tracks_data.get("count")
         for page in range(2, total_tracks // 100 + 2):
-            print(f"Fetching {page * 100}/{total_tracks}", end="\r")
             artist_tracks += self.session.get_artist_tracks(artist_id, page=page).get("results")
 
         return ArtistInfo(
