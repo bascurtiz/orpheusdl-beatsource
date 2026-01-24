@@ -99,11 +99,13 @@ class ModuleInterface:
         if not self.disable_subscription_check:
             # get the subscription from the API and check if it's at least a "Link" subscription
             account_data = self.session.get_account()
+            self.print(f"Beatsource: Account data: {account_data}") # DEBUG
             if not account_data.get("subscription"):
                 raise self.exception("Beatsource: Account does not have an active 'Link' subscription")
 
-            # Essentials = "bp_basic", Professional = "bp_link_pro"
-            if account_data.get("subscription") == "bp_link_pro":
+            # Essentials = "bp_basic", Professional = "bp_link_pro" or "bsrc_link_pro_plus"
+            sub = account_data.get("subscription", "")
+            if sub == "bp_link_pro" or "pro" in sub:
                 # Pro subscription, set the quality to high and lossless
                 self.print("Beatsource: Professional subscription detected, allowing high and lossless quality")
                 self.quality_parse[QualityEnum.HIGH] = "high"
@@ -523,12 +525,8 @@ class ModuleInterface:
 
     def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
         # Determine requested quality based on the quality_tier argument passed by Orpheus
-        if quality_tier in [QualityEnum.LOSSLESS, QualityEnum.HIFI]:
-            request_quality = 'lossless'
-        else:
-            # Default to standard lossy for other tiers (e.g., MINIMUM, LOW, MEDIUM, HIGH)
-            # The API seems to default to 256k if 'lossless' isn't requested and valid
-            request_quality = 'aac-256' 
+        # Use the parsed quality string (high, medium, lossless) which handles subscription checks
+        request_quality = self.quality_parse[quality_tier] 
             
         stream_data = self.session.get_track_download(track_id, request_quality)
 
