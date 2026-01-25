@@ -99,7 +99,7 @@ class ModuleInterface:
         if not self.disable_subscription_check:
             # get the subscription from the API and check if it's at least a "Link" subscription
             account_data = self.session.get_account()
-            self.print(f"Beatsource: Account data: {account_data}") # DEBUG
+            logging.debug(f"Beatsource: Account data: {account_data}")
             if not account_data.get("subscription"):
                 raise self.exception("Beatsource: Account does not have an active 'Link' subscription")
 
