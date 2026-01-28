@@ -190,6 +190,26 @@ class ModuleInterface:
             for i in results.get(search_key, []):
                 additional = []
                 duration = None
+                item_extra_kwargs = {"data": {i.get("id"): i}}
+                
+                # Extract cover image URL (use smaller size for search thumbnails)
+                # For tracks: use release.image (album cover), not image (which is waveform)
+                # For other types: use image directly
+                if query_type is DownloadTypeEnum.track:
+                    release_data = i.get('release') or {}
+                    image_data = release_data.get('image') or {}
+                else:
+                    image_data = i.get('image') or {}
+                image_uri = image_data.get('uri') or image_data.get('dynamic_uri') if isinstance(image_data, dict) else None
+                image_url = self._generate_artwork_url(image_uri, 56) if image_uri else None
+                
+                # Fallback to Beatsource default artist cover if no image available
+                if not image_url and query_type is DownloadTypeEnum.artist:
+                    image_url = "https://www.beatsource.com/static/images/Cover_Artist.jpg"
+                
+                # Extract preview/sample URL
+                preview_url = i.get('sample_url') or i.get('preview_url') or i.get('sample', {}).get('url')
+                
                 if query_type is DownloadTypeEnum.playlist:
                     artists = [i.get("person").get("owner_name") if i.get("person") else "Beatsource"]
                     year = i.get("change_date")[:4] if i.get("change_date") else None
@@ -205,6 +225,12 @@ class ModuleInterface:
                 elif query_type is DownloadTypeEnum.artist:
                     artists = None
                     year = None
+                    # Store artist slug for proper URL generation (Beatsource requires slug in URL)
+                    if i.get("slug"):
+                        item_extra_kwargs["artist_slug"] = i.get("slug")
+                    elif i.get("name"):
+                        # Generate slug from name if not provided
+                        item_extra_kwargs["artist_slug"] = i.get("name").lower().replace(" ", "-")
                 else:
                     raise self.exception(f"Query type '{query_type.name}' is not supported!")
 
@@ -220,7 +246,9 @@ class ModuleInterface:
                     duration=duration,
                     result_id=i.get("id"),
                     additional=additional if additional != [] else None,
-                    extra_kwargs={"data": {i.get("id"): i}}
+                    image_url=image_url,
+                    preview_url=preview_url,
+                    extra_kwargs=item_extra_kwargs
                 )
 
                 items.append(item)
