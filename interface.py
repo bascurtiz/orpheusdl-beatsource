@@ -86,10 +86,22 @@ class ModuleInterface:
             
     def login(self, email: str, password: str):
         logging.debug(f"Beatsource: no session found, login")
+        
+        # Check if credentials are provided
+        if not email or not password:
+            raise self.exception("Beatsource credentials are required. Please fill in your username and password in the settings.")
+        
         login_data = self.session.auth(email, password)
 
         if login_data.get("error_description") is not None:
-            raise self.exception(login_data.get("error_description"))
+            error_desc = login_data.get("error_description")
+            # Check for blank field errors and provide a better message
+            if isinstance(error_desc, dict):
+                if "username" in error_desc and "password" in error_desc:
+                    if any("blank" in str(msg).lower() for msg in error_desc.get("username", [])) and \
+                       any("blank" in str(msg).lower() for msg in error_desc.get("password", [])):
+                        raise self.exception("Beatsource credentials are required. Please fill in your username and password in the settings.")
+            raise self.exception(error_desc)
 
         self.valid_account()
 

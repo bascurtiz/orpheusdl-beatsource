@@ -49,6 +49,18 @@ class BeatsourceApi:
         r_login = self.s.post(login_url, json=login_payload, headers=login_headers)
 
         if r_login.status_code != 200:
+            # Check for blank field errors and provide a better message
+            try:
+                error_data = r_login.json()
+                if isinstance(error_data, dict):
+                    if "username" in error_data and "password" in error_data:
+                        username_errors = error_data.get("username", [])
+                        password_errors = error_data.get("password", [])
+                        if any("blank" in str(msg).lower() for msg in username_errors) and \
+                           any("blank" in str(msg).lower() for msg in password_errors):
+                            raise BeatsourceError("Beatsource credentials are required. Please fill in your username and password in the settings.")
+            except (ValueError, KeyError, json.JSONDecodeError):
+                pass  # If JSON parsing fails, fall through to original error
             raise ConnectionError(f"Login failed ({r_login.status_code}): {r_login.text}")
 
         session_id = self.s.cookies.get('sessionid')
