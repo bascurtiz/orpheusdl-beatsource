@@ -127,14 +127,12 @@ class ModuleInterface:
     @staticmethod
     def custom_url_parse(link: str):
         # Regex updated to capture the final numeric ID in the path
-        match = re.search(r"https?://(?:www\.)?beatsource\.com/(?:[a-z]{2}/)?(?P<type>track|release|artist|playlist|playlists|chart).*/(?P<id>\d+)[^/]*?(?:$|\?)", link)
+        match = re.search(r"https?://(?:www\.)?beatsource\.com/(?:[a-z]{2}/)?(?P<type>track|release|artist|playlist|playlists|chart|label).*/(?P<id>\d+)[^/]*?(?:$|\?)", link)
 
         if not match:
             # Handle cases where the regex doesn't match (e.g., invalid URL format)
             logging.error(f"Beatsource: Could not parse URL type/ID from: {link}")
-            # Or raise an exception, depending on desired behavior
             raise ValueError(f"Could not parse Beatsource URL: {link}")
-            # return None # Or return None if preferred
 
         # Map captured type to DownloadTypeEnum
         captured_type = match.group("type")
@@ -142,9 +140,10 @@ class ModuleInterface:
             "track": DownloadTypeEnum.track,
             "release": DownloadTypeEnum.album,
             "artist": DownloadTypeEnum.artist,
-            "playlist": DownloadTypeEnum.playlist, # Handle singular
-            "playlists": DownloadTypeEnum.playlist, # Handle plural
-            "chart": DownloadTypeEnum.playlist # Handle chart
+            "playlist": DownloadTypeEnum.playlist,
+            "playlists": DownloadTypeEnum.playlist,
+            "chart": DownloadTypeEnum.playlist,
+            "label": DownloadTypeEnum.label
         }
 
         media_type_enum = media_types.get(captured_type)
@@ -181,8 +180,9 @@ class ModuleInterface:
         api_search_type_map = {
             DownloadTypeEnum.track: "tracks",
             DownloadTypeEnum.album: "releases",
-            DownloadTypeEnum.playlist: "charts", # Or maybe playlists? API seems to use charts.
-            DownloadTypeEnum.artist: "artists"
+            DownloadTypeEnum.playlist: "charts",
+            DownloadTypeEnum.artist: "artists",
+            DownloadTypeEnum.label: "labels"
         }
         api_search_type = api_search_type_map.get(query_type)
         if not api_search_type:
@@ -215,8 +215,8 @@ class ModuleInterface:
                 image_uri = image_data.get('uri') or image_data.get('dynamic_uri') if isinstance(image_data, dict) else None
                 image_url = self._generate_artwork_url(image_uri, 56) if image_uri else None
                 
-                # Fallback to Beatsource default artist cover if no image available
-                if not image_url and query_type is DownloadTypeEnum.artist:
+                # Fallback to Beatsource default artist/label cover if no image available
+                if not image_url and query_type in (DownloadTypeEnum.artist, DownloadTypeEnum.label):
                     image_url = "https://www.beatsource.com/static/images/Cover_Artist.jpg"
                 
                 # Extract preview/sample URL
@@ -225,15 +225,24 @@ class ModuleInterface:
                 if query_type is DownloadTypeEnum.playlist:
                     artists = [i.get("person").get("owner_name") if i.get("person") else "Beatsource"]
                     year = i.get("change_date")[:4] if i.get("change_date") else None
+                    if i.get("track_count") is not None:
+                        tc = i.get('track_count')
+                        additional.append(f"1 track" if tc == 1 else f"{tc} tracks")
                 elif query_type is DownloadTypeEnum.track:
                     artists = [a.get("name") for a in i.get("artists")]
                     year = i.get("publish_date")[:4] if i.get("publish_date") else None
 
                     duration = i.get("length_ms") // 1000
-                    additional.append(f"{i.get('bpm')}BPM")
+                    if i.get("bpm"):
+                        additional.append(f"{i.get('bpm')} BPM")
+                    # Store track slug for URL build (Beatsource URLs are /track/slug/id)
+                    if i.get("slug"):
+                        item_extra_kwargs["track_slug"] = i.get("slug")
                 elif query_type is DownloadTypeEnum.album:
                     artists = [j.get("name") for j in i.get("artists")]
                     year = i.get("publish_date")[:4] if i.get("publish_date") else None
+                    if i.get("track_count") is not None:
+                        tc = i.get('track_count'); additional.append(f"1 track" if tc == 1 else f"{tc} tracks")
                 elif query_type is DownloadTypeEnum.artist:
                     artists = None
                     year = None
@@ -241,8 +250,21 @@ class ModuleInterface:
                     if i.get("slug"):
                         item_extra_kwargs["artist_slug"] = i.get("slug")
                     elif i.get("name"):
-                        # Generate slug from name if not provided
                         item_extra_kwargs["artist_slug"] = i.get("name").lower().replace(" ", "-")
+                elif query_type is DownloadTypeEnum.label:
+                    # Skip only when API explicitly reports 0 releases (empty label); if count missing, still show
+                    rc = i.get("releases_count") or i.get("release_count")
+                    if rc is not None and rc == 0:
+                        continue
+                    artists = [i.get("name")] if i.get("name") else None
+                    date_val = i.get("founded") or i.get("created_at") or i.get("founded_date")
+                    year = date_val[:4] if (date_val and isinstance(date_val, str) and len(date_val) >= 4) else (str(getattr(date_val, 'year', '')) if date_val and hasattr(date_val, 'year') else None)
+                    if i.get("slug"):
+                        item_extra_kwargs["label_slug"] = i.get("slug")
+                    elif i.get("name"):
+                        item_extra_kwargs["label_slug"] = i.get("name").lower().replace(" ", "-")
+                    if rc is not None:
+                        additional.append(f"1 release" if rc == 1 else f"{rc} releases")
                 else:
                     raise self.exception(f"Query type '{query_type.name}' is not supported!")
 
@@ -250,6 +272,9 @@ class ModuleInterface:
                 name += f" ({i.get('mix_name')})" if i.get("mix_name") else ""
 
                 additional.append(f"Exclusive") if i.get("exclusive") is True else None
+
+                if query_type is DownloadTypeEnum.playlist and (i.get("track_count") is None or i.get("track_count") == 0):
+                    continue
 
                 item = SearchResult(
                     name=name,
@@ -413,6 +438,45 @@ class ModuleInterface:
             track_extra_kwargs={"data": {t.get("id"): t for t in artist_tracks}},
         )
 
+    def get_label_info(self, label_id: str, get_credited_albums: bool = True, **kwargs) -> ArtistInfo:
+        """Return label metadata, releases (as albums), and tracks as ArtistInfo for consistent download flow."""
+        label_data = self.session.get_label(label_id)
+        label_name = label_data.get("name") or "Unknown Label"
+
+        label_tracks = []
+        try:
+            tracks_data = self.session.get_label_tracks(label_id)
+            label_tracks = list(tracks_data.get("results") or [])
+            total_tracks = tracks_data.get("count") or len(label_tracks)
+            for page in range(2, total_tracks // 100 + 2):
+                label_tracks += self.session.get_label_tracks(label_id, page=page, per_page=100).get("results") or []
+        except Exception:
+            pass
+
+        releases_list = []
+        try:
+            releases_data = self.session.get_label_releases(label_id)
+            releases_list = list(releases_data.get("results") or [])
+            total_releases = releases_data.get("count") or len(releases_list)
+            for page in range(2, total_releases // 100 + 2):
+                releases_list += self.session.get_label_releases(label_id, page=page, per_page=100).get("results") or []
+        except Exception:
+            pass
+
+        release_ids = [str(r.get("id")) for r in releases_list if r.get("id") is not None]
+        track_ids = [t.get("id") for t in label_tracks if t.get("id") is not None]
+        album_data = {str(r.get("id")): r for r in releases_list if r.get("id") is not None}
+        track_data = {t.get("id"): t for t in label_tracks if t.get("id") is not None}
+
+        return ArtistInfo(
+            name=label_name,
+            artist_id=label_id,
+            albums=release_ids,
+            album_extra_kwargs={"data": album_data},
+            tracks=track_ids,
+            track_extra_kwargs={"data": track_data},
+        )
+
     def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo | None:
         # check if album is already in album cache, add it
         if data is None:
@@ -464,7 +528,10 @@ class ModuleInterface:
         if data is None:
             data = {}
 
-        track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
+        # Support both str and int keys (artist/playlist track_data often has int ids from API)
+        track_data = data.get(track_id) or (data.get(int(track_id)) if isinstance(track_id, str) and track_id.isdigit() else None)
+        if track_data is None:
+            track_data = self.session.get_track(track_id)
 
         album_id = track_data.get("release").get("id")
         album_data = {}
@@ -531,12 +598,16 @@ class ModuleInterface:
         
         length_ms = track_data.get("length_ms")
 
+        # Extract preview/sample URL (same as search; enables album track list preview in GUI)
+        preview_url = track_data.get('sample_url') or track_data.get('preview_url') or (track_data.get('sample') or {}).get('url')
+
         track_info = TrackInfo(
             name=track_name,
             album=album_data.get("name"),
             album_id=album_data.get("id"),
             artists=[a.get("name") for a in (track_artists or [])],
             artist_id=(track_artists or [{}])[0].get("id"),
+            id=str(track_id),
             release_year=release_year,
             duration=length_ms // 1000 if length_ms else None,
             bitrate=bitrate, # Use determined bitrate
@@ -547,7 +618,8 @@ class ModuleInterface:
             tags=tags,
             codec=codec, # Use determined codec
             download_extra_kwargs={"track_id": track_id, "quality_tier": quality_tier},
-            error=error
+            error=error,
+            preview_url=preview_url
         )
 
         return track_info
@@ -556,7 +628,9 @@ class ModuleInterface:
         if data is None:
             data = {}
 
-        track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
+        track_data = data.get(track_id) or (data.get(int(track_id)) if isinstance(track_id, str) and track_id.isdigit() else None)
+        if track_data is None:
+            track_data = self.session.get_track(track_id)
         cover_url = track_data.get("release").get("image").get("dynamic_uri")
 
         return CoverInfo(

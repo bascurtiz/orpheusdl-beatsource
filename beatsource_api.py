@@ -270,8 +270,17 @@ class BeatsourceApi:
     def get_label(self, label_id: str):
         return self._get(f'catalog/labels/{label_id}')
 
-    def get_label_releases(self, label_id: str):
-        return self._get(f'catalog/labels/{label_id}/releases')
+    def get_label_releases(self, label_id: str, page: int = 1, per_page: int = 100):
+        return self._get(f'catalog/labels/{label_id}/releases', params={
+            'page': page,
+            'per_page': per_page
+        })
+
+    def get_label_tracks(self, label_id: str, page: int = 1, per_page: int = 100):
+        return self._get(f'catalog/labels/{label_id}/tracks', params={
+            'page': page,
+            'per_page': per_page
+        })
 
     def get_search(self, query: str, search_type: str = 'tracks', per_page: int = 50):
         return self._get('catalog/search', params={'q': query, 'type': search_type, 'per_page': per_page})
