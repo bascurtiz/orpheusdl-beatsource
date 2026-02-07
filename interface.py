@@ -107,7 +107,11 @@ class ModuleInterface:
         
         # Check if credentials are provided
         if not email or not password:
-            raise self.exception("Beatsource credentials are required. Please fill in your username and password in the settings.")
+            raise self.exception(
+                "Beatsource credentials are missing in settings.json. "
+                "Please fill in: username, password. "
+                "Use the OrpheusDL GUI Settings tab (Beatsource) or edit config/settings.json directly."
+            )
         
         login_data = self.session.auth(email, password)
 
@@ -118,7 +122,11 @@ class ModuleInterface:
                 if "username" in error_desc and "password" in error_desc:
                     if any("blank" in str(msg).lower() for msg in error_desc.get("username", [])) and \
                        any("blank" in str(msg).lower() for msg in error_desc.get("password", [])):
-                        raise self.exception("Beatsource credentials are required. Please fill in your username and password in the settings.")
+                        raise self.exception(
+                            "Beatsource credentials are missing in settings.json. "
+                            "Please fill in: username, password. "
+                            "Use the OrpheusDL GUI Settings tab (Beatsource) or edit config/settings.json directly."
+                        )
             raise self.exception(error_desc)
 
         self.valid_account()

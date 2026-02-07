@@ -58,7 +58,11 @@ class BeatsourceApi:
                         password_errors = error_data.get("password", [])
                         if any("blank" in str(msg).lower() for msg in username_errors) and \
                            any("blank" in str(msg).lower() for msg in password_errors):
-                            raise BeatsourceError("Beatsource credentials are required. Please fill in your username and password in the settings.")
+                            raise BeatsourceError(
+                                "Beatsource credentials are missing in settings.json. "
+                                "Please fill in: username, password. "
+                                "Use the OrpheusDL GUI Settings tab (Beatsource) or edit config/settings.json directly."
+                            )
             except (ValueError, KeyError, json.JSONDecodeError):
                 pass  # If JSON parsing fails, fall through to original error
             raise ConnectionError(f"Login failed ({r_login.status_code}): {r_login.text}")
