@@ -142,7 +142,7 @@ class ModuleInterface:
                 raise self.exception("Beatsource: Account does not have an active 'Link' subscription")
 
             # Essentials = "bp_basic", Professional = "bp_link_pro" or "bsrc_link_pro_plus"
-            sub = account_data.get("subscription", "")
+            sub = account_data.get("subscription", "").lower()
             if sub == "bp_link_pro" or "pro" in sub:
                 # Pro subscription, set the quality to high and lossless
                 self.print("Beatsource: Professional subscription detected, allowing high and lossless quality")
