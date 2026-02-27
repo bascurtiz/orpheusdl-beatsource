@@ -36,7 +36,8 @@ class ModuleInterface:
             QualityEnum.MEDIUM: "medium",
             QualityEnum.HIGH: "medium",
             QualityEnum.LOSSLESS: "medium",
-            QualityEnum.HIFI: "medium"
+            QualityEnum.HIFI: "medium",
+            QualityEnum.ATMOS: "medium"
         }
 
         self.session = BeatsourceApi()
