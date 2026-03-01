@@ -55,7 +55,7 @@ class ModuleInterface:
         has_credentials = bool(username) and bool(password)
 
         if not has_credentials:
-            self.print("Beatsource: No credentials provided, running in anonymous mode")
+            self.print("Beatsource: No credentials provided, running in anonymous mode (search results are limited - login for more)")
             # Always fetch a fresh anonymous token for search since they are short-lived
             # or immediately invalidate after a certain duration despite their JWT exp
             self.session.get_anonymous_token()
