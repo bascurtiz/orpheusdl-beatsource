@@ -49,10 +49,22 @@ class ModuleInterface:
 
         self.session.set_session(session)
 
+        username = module_controller.module_settings.get("username")
+        password = module_controller.module_settings.get("password")
+
+        has_credentials = bool(username) and bool(password)
+
+        if not has_credentials:
+            self.print("Beatsource: No credentials provided, running in anonymous mode")
+            # Always fetch a fresh anonymous token for search since they are short-lived
+            # or immediately invalidate after a certain duration despite their JWT exp
+            self.session.get_anonymous_token()
+            self._save_session()
+            return
+
         if session["refresh_token"] is None:
             # old beatsource version with cookies and no refresh token, trigger login manually
-            session = self.login(module_controller.module_settings["username"],
-                                 module_controller.module_settings["password"])
+            session = self.login(username, password)
 
         if session["refresh_token"] is not None and datetime.now() > session["expires"]:
             # access token expired, get new refresh token
@@ -68,8 +80,7 @@ class ModuleInterface:
                 self.module_controller.temporary_settings_controller.set("access_token", None)
                 self.module_controller.temporary_settings_controller.set("refresh_token", None)
                 self.module_controller.temporary_settings_controller.set("expires", None)
-                self.login(self.module_controller.module_settings["username"],
-                          self.module_controller.module_settings["password"])
+                self.login(username, password)
             else:
                 raise
 
@@ -216,7 +227,10 @@ class ModuleInterface:
             raise self.exception(f"Query type '{query_type.name}' is not supported for Beatsource search!")
 
         # Call API with the correct type and limit
-        results = self.session.get_search(query, search_type=api_search_type, per_page=limit)
+        if not self.session.refresh_token:
+            results = self.session._get('catalog/search', params={'q': query})
+        else:
+            results = self.session.get_search(query, search_type=api_search_type, per_page=limit)
         logging.debug(f"Beatsource API Search Response (type={api_search_type}): {results}")
 
         # Use the API type string as the key to get results
@@ -449,15 +463,19 @@ class ModuleInterface:
             track_extra_kwargs=cache
         )
 
-    def get_artist_info(self, artist_id: str, get_credited_albums: bool) -> ArtistInfo:
+    def get_artist_info(self, artist_id: str, get_credited_albums: bool, **kwargs) -> ArtistInfo:
         artist_data = self.session.get_artist(artist_id)
         artist_tracks_data = self.session.get_artist_tracks(artist_id)
 
         # now fetch all the found total_items
         artist_tracks = artist_tracks_data.get("results")
         total_tracks = artist_tracks_data.get("count")
-        for page in range(2, total_tracks // 100 + 2):
+        num_pages = max(1, (total_tracks + 99) // 100)
+        for page in range(2, num_pages + 1):
+            self.print(f"Fetching artist tracks (page {page}/{num_pages})...")
             artist_tracks += self.session.get_artist_tracks(artist_id, page=page).get("results")
+        if num_pages > 1:
+            self.print("")
 
         return ArtistInfo(
             name=artist_data.get("name"),
@@ -475,8 +493,12 @@ class ModuleInterface:
             tracks_data = self.session.get_label_tracks(label_id)
             label_tracks = list(tracks_data.get("results") or [])
             total_tracks = tracks_data.get("count") or len(label_tracks)
-            for page in range(2, total_tracks // 100 + 2):
+            num_pages = max(1, (total_tracks + 99) // 100)
+            for page in range(2, num_pages + 1):
+                self.print(f"Fetching label tracks (page {page}/{num_pages})...")
                 label_tracks += self.session.get_label_tracks(label_id, page=page, per_page=100).get("results") or []
+            if num_pages > 1:
+                self.print("")
         except Exception:
             pass
 
@@ -485,8 +507,12 @@ class ModuleInterface:
             releases_data = self.session.get_label_releases(label_id)
             releases_list = list(releases_data.get("results") or [])
             total_releases = releases_data.get("count") or len(releases_list)
-            for page in range(2, total_releases // 100 + 2):
+            num_pages = max(1, (total_releases + 99) // 100)
+            for page in range(2, num_pages + 1):
+                self.print(f"Fetching label releases (page {page}/{num_pages})...")
                 releases_list += self.session.get_label_releases(label_id, page=page, per_page=100).get("results") or []
+            if num_pages > 1:
+                self.print("")
         except Exception:
             pass
 
@@ -504,7 +530,7 @@ class ModuleInterface:
             track_extra_kwargs={"data": track_data},
         )
 
-    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo | None:
+    def get_album_info(self, album_id: str, data=None, is_chart: bool = False, **kwargs) -> AlbumInfo | None:
         # check if album is already in album cache, add it
         if data is None:
             data = {}
@@ -520,9 +546,12 @@ class ModuleInterface:
         # now fetch all the found total_items
         tracks = tracks_data.get("results")
         total_tracks = tracks_data.get("count")
-        for page in range(2, total_tracks // 100 + 2):
+        num_pages = max(1, (total_tracks + 99) // 100)
+        for page in range(2, num_pages + 1):
             print(f"Fetching {len(tracks)}/{total_tracks}", end="\r")
             tracks += self.session.get_release_tracks(album_id, page=page).get("results")
+        if num_pages > 1:
+            print("")
 
         cache = {"data": {album_id: album_data}}
         for i, track in enumerate(tracks):
@@ -551,7 +580,7 @@ class ModuleInterface:
         )
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, slug: str = None,
-                       data=None, is_chart: bool = False) -> TrackInfo:
+                       data=None, is_chart: bool = False, **kwargs) -> TrackInfo:
         if data is None:
             data = {}
 
@@ -665,6 +694,9 @@ class ModuleInterface:
             file_type=ImageFileTypeEnum.jpg)
 
     def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
+        if not self.module_controller.module_settings.get("username") or not self.module_controller.module_settings.get("password"):
+            raise self.exception("Downloading tracks requires a logged-in Beatsource account. Please add your credentials in the settings.")
+
         # Determine requested quality based on the quality_tier argument passed by Orpheus
         # Use the parsed quality string (high, medium, lossless) which handles subscription checks
         request_quality = self.quality_parse[quality_tier] 
