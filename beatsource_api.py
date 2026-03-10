@@ -319,6 +319,12 @@ class BeatsourceApi:
             'per_page': per_page
         })
 
+    def get_artist_releases(self, artist_id: str, page: int = 1, per_page: int = 100):
+        return self._get(f'catalog/artists/{artist_id}/releases', params={
+            'page': page,
+            'per_page': per_page
+        })
+
     def get_label(self, label_id: str):
         return self._get(f'catalog/labels/{label_id}')
 
