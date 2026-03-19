@@ -54,6 +54,7 @@ class ModuleInterface:
 
         has_credentials = bool(username) and bool(password)
 
+        self.is_anonymous = not has_credentials
         if not has_credentials:
             self.print("Beatsource: No credentials provided, running in anonymous mode (search results are limited - login for more)")
             # Always fetch a fresh anonymous token for search since they are short-lived
@@ -579,12 +580,16 @@ class ModuleInterface:
             if rid in release_track_counts_map and tc == release_track_counts_map[rid]:
                 duration = release_durations_map.get(rid)
 
+            # Extract cover and format it if it's a dynamic URI
+            cover_uri = r.get("image", {}).get("uri") or r.get("image", {}).get("dynamic_uri")
+            cover_url = self._generate_artwork_url(cover_uri, self.cover_size) if cover_uri else None
+
             albums_out.append({
                 'id': rid,
                 'name': r.get("name"),
                 'artist': artist_name,
-                'release_year': str(r.get("new_release_date", ""))[:4] or None,
-                'cover_url': r.get("image", {}).get("uri"),
+                'release_year': str(r.get("publish_date", r.get("new_release_date", "")))[:4] or None,
+                'cover_url': cover_url,
                 'additional': [f"1 track" if tc == 1 else f"{tc} tracks"] if tc else None,
                 'duration': duration
             })
@@ -754,17 +759,46 @@ class ModuleInterface:
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, slug: str = None,
                        data=None, is_chart: bool = False, **kwargs) -> TrackInfo:
+        error_message = None
+        if self.is_anonymous:
+            error_message = "Beatsource credentials are required for downloading. Please fill in your username and password in the settings."
+
         if data is None:
             data = {}
 
         # Support both str and int keys (artist/playlist track_data often has int ids from API)
-        track_data = data.get(track_id) or (data.get(int(track_id)) if isinstance(track_id, str) and track_id.isdigit() else None)
+        track_id_str = str(track_id)
+        track_data = data.get(track_id_str) or (data.get(int(track_id_str)) if track_id_str.isdigit() else None)
+        
         if track_data is None:
-            track_data = self.session.get_track(track_id)
+            try:
+                track_data = self.session.get_track(track_id)
+            except Exception as e:
+                # If we're anonymous and can't even get metadata, return minimal info with error
+                if self.is_anonymous:
+                    return TrackInfo(
+                        name="Unknown Track",
+                        album_id="",
+                        album="Unknown Album", 
+                        artists=["Unknown Artist"],
+                        artist_id="",
+                        bit_depth=16,
+                        bitrate=320,
+                        sample_rate=44.1,
+                        release_year=0,
+                        explicit=False,
+                        cover_url=None,
+                        tags=Tags(),                
+                        duration=None,
+                        codec=CodecEnum.AAC,
+                        error=error_message
+                    )
+                raise
 
-        album_id = track_data.get("release").get("id")
+        album_obj = track_data.get("release") or {}
+        album_id = str(album_obj.get("id")) if album_obj.get("id") else ""
         album_data = {}
-        error = None
+        error = error_message
 
         try:
             album_data = data[album_id] if album_id in data else self.session.get_release(album_id)
@@ -777,18 +811,27 @@ class ModuleInterface:
         track_name += f" ({track_data.get('mix_name')})" if track_data.get("mix_name") else ""
 
         release_year = track_data.get("publish_date")[:4] if track_data.get("publish_date") else None
-        genres = [track_data.get("genre").get("name")]
+        genre_obj = track_data.get("genre")
+        genres = [genre_obj.get("name")] if genre_obj else []
         # check if a second genre exists
-        genres += [track_data.get("sub_genre").get("name")] if track_data.get("sub_genre") else []
-
+        sub_genre_obj = track_data.get("sub_genre")
+        genres += [sub_genre_obj.get("name")] if sub_genre_obj else []
         extra_tags = {}
         if track_data.get("bpm"):
             extra_tags["BPM"] = str(track_data.get("bpm"))
         if track_data.get("key"):
-            extra_tags["Key"] = track_data.get("key").get("name")
+            key_obj = track_data.get("key")
+            extra_tags["Key"] = key_obj.get("name") if key_obj else None
         if track_data.get("catalog_number"):
             extra_tags["Catalog number"] = track_data.get("catalog_number")
 
+        label_obj = album_obj.get("label") or {}
+        label_name = label_obj.get("name") or ""
+        
+        track_image_obj = album_obj.get("image") or {}
+        track_cover_uri = track_image_obj.get("dynamic_uri") or track_image_obj.get("uri")
+        track_cover_url = self._generate_artwork_url(track_cover_uri, self.cover_size) if track_cover_uri else None
+        
         track_artists = track_data.get("artists") or track_data.get("remixers") or track_data.get("remixer") or track_data.get("bsrc_remixer")
         # Fallback to using track artists for album artist if album artist is missing
         album_artists = album_data.get("artists") or album_data.get("remixers") or album_data.get("remixer") or track_artists
@@ -801,16 +844,16 @@ class ModuleInterface:
             isrc=track_data.get("isrc"),
             genres=genres,
             release_date=track_data.get("publish_date"),
-            copyright=f"© {release_year} {track_data.get('release').get('label').get('name')}",
-            label=track_data.get("release").get("label").get("name"),
+            copyright=f"© {release_year} {label_name}",
+            label=label_name,
             catalog_number=track_data.get("catalog_number"),
             extra_tags=extra_tags
         )
 
-        if not track_data["is_available_for_streaming"]:
-            error = f"Track '{track_data.get('name')}' is not streamable!"
+        if not track_data.get("is_available_for_streaming", True):
+            error = f"Track '{track_data.get('name') or 'Unknown'}' is not streamable!"
         elif track_data.get("preorder"):
-            error = f"Track '{track_data.get('name')}' is not yet released!"
+            error = f"Track '{track_data.get('name') or 'Unknown'}' is not yet released!"
 
         # Determine codec, bitrate, bit_depth directly from quality_tier argument
         if quality_tier in [QualityEnum.LOSSLESS, QualityEnum.HIFI]:
@@ -843,8 +886,7 @@ class ModuleInterface:
             bitrate=bitrate, # Use determined bitrate
             bit_depth=bit_depth, # Use determined bit_depth
             sample_rate=44.1,
-            cover_url=self._generate_artwork_url(
-                track_data.get("release").get("image").get("dynamic_uri"), self.cover_size),
+            cover_url=track_cover_url,
             tags=tags,
             codec=codec, # Use determined codec
             download_extra_kwargs={"track_id": track_id, "quality_tier": quality_tier},
