@@ -37,6 +37,9 @@ class BeatsourceApi:
 
         match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', r.text, flags=re.DOTALL)
         if not match:
+            # Check for Cloudflare/reCAPTCHA challenge page
+            if "reCAPTCHA" in r.text or "Checking your browser" in r.text or "Cloudflare" in r.text:
+                raise BeatsourceError("Beatsource credentials are required because anonymous login is currently unavailable due to Cloudflare protection. Please fill in your username and password in settings.json.")
             raise BeatsourceError("Could not find __NEXT_DATA__ on Beatsource homepage")
 
         data = json.loads(match.group(1))
