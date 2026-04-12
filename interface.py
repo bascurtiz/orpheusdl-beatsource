@@ -748,9 +748,9 @@ class ModuleInterface:
             duration=sum([t.get("length_ms") // 1000 for t in tracks]),
             upc=album_data.get("upc"),
             cover_url=self._generate_artwork_url(album_data.get("image").get("dynamic_uri"), self.cover_size),
-            artist=(album_artists or [{}])[0].get("name"),
-            artist_id=(album_artists or [{}])[0].get("id"),
-            album_artist=(album_artists or [{}])[0].get("name"),
+            artist=(album_artists[0].get("name") if album_artists else "Unknown Artist"),
+            artist_id=(str(album_artists[0].get("id")) if album_artists else None),
+            album_artist=(album_artists[0].get("name") if album_artists else "Unknown Artist"),
             label=(album_data.get("label") or {}).get("name"),
             catalog_number=album_data.get("catalog_number"),
             tracks=[t.get("id") for t in tracks],
@@ -836,8 +836,12 @@ class ModuleInterface:
         # Fallback to using track artists for album artist if album artist is missing
         album_artists = album_data.get("artists") or album_data.get("remixers") or album_data.get("remixer") or track_artists
 
+        # Determine the primary album artist name. Use joined artist names.
+        album_artist_names = [a.get("name") for a in album_artists if isinstance(a, dict) and a.get("name")]
+        album_artist = album_artist_names[0] if album_artist_names else "Unknown Artist"
+
         tags = Tags(
-            album_artist=(album_artists or [{}])[0].get("name"),
+            album_artist=album_artist,
             track_number=track_data.get("number"),
             total_tracks=album_data.get("track_count"),
             upc=album_data.get("upc"),
@@ -847,7 +851,8 @@ class ModuleInterface:
             copyright=f"© {release_year} {label_name}",
             label=label_name,
             catalog_number=track_data.get("catalog_number"),
-            extra_tags=extra_tags
+            extra_tags=extra_tags,
+            track_url=f"https://www.beatsource.com/track/{track_data.get('slug', '_')}/{track_id}"
         )
 
         if not track_data.get("is_available_for_streaming", True):
